@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,6 +13,14 @@ from langgraph.graph import END, START, StateGraph
 from rag_app.config import Settings
 from rag_app.models import GradeResult, RetrievalState, RewrittenQuery
 from rag_app.retrieval import Retrievers, reciprocal_rank_fusion
+
+
+def source_label(metadata: dict[str, Any]) -> str:
+    source = str(metadata.get("source", "?")).replace("\\", "/").rsplit("/", 1)[-1]
+    page = metadata.get("page")
+    if isinstance(page, int):
+        return f"{source}, p. {page + 1}"
+    return source
 
 
 def route_after_grade(
@@ -87,14 +96,23 @@ def build_retrieval_graph(
         if not docs:
             return {"answer": "No relevant information found in the knowledge base."}
         context = "\n\n".join(
-            f"[{doc.metadata.get('source', '?')}] {doc.page_content}"
+            f"[{source_label(doc.metadata)}] {doc.page_content}"
             for doc in docs
         )
         message = llm.invoke(
             [
                 SystemMessage(
-                    content="Answer using ONLY the context. Cite sources in "
-                    "brackets. If the context is insufficient, say so."
+                    content="You are an IRCTC information assistant. Answer the "
+                    "user using only facts explicitly stated in the provided "
+                    "IRCTC document excerpts. Do not use prior knowledge, make "
+                    "assumptions, or add policy details that are absent from "
+                    "the excerpts. Answer only what the user asked; do not "
+                    "summarize unrelated questions or topics found in the "
+                    "excerpts. Keep the answer to at most three sentences. Do "
+                    "not write citations; the application will add source "
+                    "citations. If the excerpts do not answer the question, say "
+                    "that you could not find the information in the provided "
+                    "IRCTC documents."
                 ),
                 HumanMessage(
                     content=f"Question: {state['original_query']}\n\n"
@@ -102,7 +120,10 @@ def build_retrieval_graph(
                 ),
             ]
         )
-        return {"answer": message.content}
+        answer = re.sub(r"\[[^\]\r\n]{1,80}\]", "", message.content).strip()
+        sources = sorted({source_label(doc.metadata) for doc in docs})
+        references = "\n".join(f"- {source}" for source in sources)
+        return {"answer": f"{answer}\n\nSources:\n{references}"}
 
     graph = StateGraph(RetrievalState)
     graph.add_node("bm25", bm25_node)

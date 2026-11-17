@@ -12,8 +12,8 @@ from pydantic import BaseModel, Field
 class RouteDecision(BaseModel):
     route: Literal["clarify", "direct", "retrieve"] = Field(
         description="clarify: query is ambiguous and cannot be answered without "
-        "more info. direct: general chit-chat/simple question needing "
-        "no knowledge base. retrieve: needs the knowledge base."
+        "more info. direct: greeting or small talk only. retrieve: any factual "
+        "question that should be checked against the IRCTC knowledge base."
     )
     clarifying_question: str = Field(
         default="", description="Question to ask the user if route == clarify."

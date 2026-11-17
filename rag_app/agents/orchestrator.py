@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -13,6 +14,40 @@ from langgraph.types import Send, interrupt
 
 from rag_app.config import Settings
 from rag_app.models import AgentState, Decomposition, RouteDecision, SubQueryInput
+
+
+_SMALL_TALK = {
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "how are you doing",
+    "what can you do",
+    "who are you",
+}
+
+_MULTI_PART_MARKERS = (
+    " and ",
+    " also ",
+    "compare ",
+    "difference between ",
+    "as well as ",
+    ";",
+)
+
+
+def is_small_talk(question: str) -> bool:
+    normalized = re.sub(r"[!?.\s]+$", "", question.casefold().strip())
+    return normalized in _SMALL_TALK or bool(
+        re.fullmatch(r"(hi|hello|hey)( there)?", normalized)
+    )
+
+
+def is_compound_question(question: str) -> bool:
+    normalized = question.casefold()
+    return normalized.count("?") > 1 or any(
+        marker in normalized for marker in _MULTI_PART_MARKERS
+    )
 
 
 def route_after_router(
@@ -27,22 +62,32 @@ def build_graph(
     llm: BaseChatModel, retrieval_graph: Any, settings: Settings
 ) -> CompiledStateGraph[AgentState, Any, Any, Any]:
     def router_node(state: AgentState):
+        question = state["question"]
+        if is_small_talk(question):
+            return {"route": "direct", "clarifying_question": ""}
+
         count = state.get("clarification_count", 0)
         decider = llm.with_structured_output(RouteDecision)
         decision = decider.invoke(
             [
                 SystemMessage(
-                    content="You route user questions for a RAG system. Choose "
+                    content="You route user questions for an IRCTC information "
+                    "assistant. Choose "
                     "'clarify' ONLY if the question is genuinely ambiguous "
                     "(missing referent, unclear scope) and you cannot "
-                    "reasonably guess. Choose 'direct' for greetings or "
-                    "general questions needing no documents. Otherwise "
-                    "choose 'retrieve'."
+                    "reasonably guess. Choose 'direct' only for greetings or "
+                    "small talk. Route every factual or service question to "
+                    "'retrieve', especially questions about IRCTC, train "
+                    "tickets, Tatkal, cancellation, insurance, agents, or "
+                    "loyalty benefits. If the documents do not cover it, the "
+                    "assistant should say so rather than answer from memory."
                 ),
-                HumanMessage(content=state["question"]),
+                HumanMessage(content=question),
             ]
         )
         route = decision.route
+        if route == "direct":
+            route = "retrieve"
         if route == "clarify" and count >= settings.max_clarifications:
             route = "retrieve"
         return {
@@ -63,9 +108,23 @@ def build_graph(
         }
 
     def direct_node(state: AgentState):
-        return {"answer": llm.invoke(state["question"]).content}
+        message = llm.invoke(
+            [
+                SystemMessage(
+                    content="You are a friendly IRCTC information assistant. "
+                    "Respond briefly to the greeting and invite the user to ask "
+                    "about IRCTC services. Do not invent service details."
+                ),
+                HumanMessage(content=state["question"]),
+            ]
+        )
+        return {"answer": message.content}
 
     def decompose_node(state: AgentState):
+        question = state["question"]
+        if not is_compound_question(question):
+            return {"sub_queries": [question]}
+
         decomposer = llm.with_structured_output(Decomposition)
         result = decomposer.invoke(
             [
@@ -75,7 +134,7 @@ def build_graph(
                     "answered in parallel. Do not split single-part "
                     "questions."
                 ),
-                HumanMessage(content=state["question"]),
+                HumanMessage(content=question),
             ]
         )
         sub_queries = [
@@ -105,23 +164,14 @@ def build_graph(
         }
 
     def synthesize_node(state: AgentState):
+        if len(state["sub_answers"]) == 1:
+            return {"answer": state["sub_answers"][0]["answer"]}
+
         findings = "\n\n".join(
-            f"Sub-question: {item['sub_query']}\nFinding: {item['answer']}"
+            f"**{item['sub_query']}**\n{item['answer']}"
             for item in state["sub_answers"]
         )
-        message = llm.invoke(
-            [
-                SystemMessage(
-                    content="Combine the findings into one coherent answer to the "
-                    "original question. Keep citations. Note any gaps "
-                    "honestly; do not invent facts."
-                ),
-                HumanMessage(
-                    content=f"Original question: {state['question']}\n\n{findings}"
-                ),
-            ]
-        )
-        return {"answer": message.content}
+        return {"answer": findings}
 
     graph = StateGraph(AgentState)
     graph.add_node("router", router_node)
