@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
@@ -21,7 +21,11 @@ AgentGraph = CompiledStateGraph[AgentState, Any, Any, Any]
 
 def build_application(settings: Optional[Settings] = None) -> AgentGraph:
     settings = settings or Settings.from_env()
-    llm = ChatOpenAI(model=settings.llm_model, temperature=0)
+    llm = ChatOllama(
+        model=settings.llm_model,
+        base_url=settings.ollama_base_url,
+        temperature=0,
+    )
     retrievers = build_retrievers(settings)
     retrieval_graph = build_retrieval_graph(llm, retrievers, settings)
     return build_graph(llm, retrieval_graph, settings)

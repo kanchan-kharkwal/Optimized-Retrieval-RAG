@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -29,7 +30,10 @@ def load_documents(docs_dir: Path) -> List[Document]:
     docs: List[Document] = []
     if docs_dir.exists():
         for path in docs_dir.rglob("*"):
-            if path.suffix.lower() in {".txt", ".md"}:
+            suffix = path.suffix.lower()
+            if suffix == ".pdf":
+                docs.extend(PyPDFLoader(str(path)).load())
+            elif suffix in {".txt", ".md"}:
                 docs.append(
                     Document(
                         page_content=path.read_text(errors="ignore"),

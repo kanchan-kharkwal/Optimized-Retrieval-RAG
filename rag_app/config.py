@@ -9,8 +9,9 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Settings:
-    llm_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
+    llm_model: str = "llama3.2:3b"
+    embedding_model: str = "nomic-embed-text"
+    ollama_base_url: str = "http://localhost:11434"
     docs_dir: Path = Path("docs")
     top_k: int = 8
     fused_top_n: int = 6
@@ -22,7 +23,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            embedding_model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
+            llm_model=os.getenv("LLM_MODEL", "llama3.2:3b"),
+            embedding_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
+            ollama_base_url=os.getenv(
+                "OLLAMA_BASE_URL", "http://localhost:11434"
+            ),
             docs_dir=Path(os.getenv("DOCS_DIR", "docs")),
         )
